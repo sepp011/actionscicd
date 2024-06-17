@@ -19,7 +19,7 @@ jobs:
     name: Build and Publish
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@2  ## this step clones the repository
+      - uses: actions/checkout@v4  ## this step clones the repository
 
       - name: Use Node ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v1
