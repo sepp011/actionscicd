@@ -1,25 +1,113 @@
-name: Run Azure Login with OpenID Connect and PowerShell
-on: [push]
+name: Build and Deploy node app to Azure
+on: 
+  push:
+    branches:
+      - main
 
-permissions:
-  id-token: write
-  contents: read
-      
-jobs: 
-  Windows-latest:
-    runs-on: windows-latest
+env:
+  AZURE_WEBAPP_NAME: "actionscicd-sushi"
+  AZURE_WEBAPP_PACKAGE_PATH: "build"
+  NODE_VERSION: '22.3.0'
+  RESOURCEGROUPNAME: "actionscicd"
+  LOCATION: "Australia East"
+  HOSTINGPLANNAME: "actionscicd-plan"
+  APPINSIGHTLOCATION: "Australia East"
+  SKU: "S1 Standard"
+
+jobs:
+  build: 
+    name: Build and Publish
+    runs-on: ubuntu-latest
     steps:
-      - name: OIDC Login to Azure Public Cloud with AzPowershell (enableAzPSSession true)
-        uses: azure/login@v1
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }} 
-          enable-AzPSSession: true
+      - uses: actions/checkout@2  ## this step clones the repository
 
-      - name: 'Get resource group with PowerShell action'
-        uses: azure/powershell@v1
+      - name: Use Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v1
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+ 
+      - name: Build Project
+        continue-on-error: false
+        run: |
+          npm install
+          npm run build
+
+      - name: Create Artifact Dirs
+        run: |
+          mkdir buildartifacts
+          mkdir deploymenttemplates
+
+      - name: Archive app
+        run: |
+          zip -qq -r ./buildartifacts/Application.zip ./build
+
+      - name: Upload Build Artifact
+        continue-on-error: false
+        uses: actions/upload-artifact@v2
+        with:
+          name: buildartifacts
+          path: buildartifacts
+
+      - name: Archive ARM Temps
+        run: |
+          zip -qq -r ./deploymenttemplates/armtemplates.zip ./armTemplate
+
+      - name: Upload ARM Temp Artifact
+        continue-on-error: false
+        uses: actions/upload-artifact@v2
+        with:
+          name: deploymenttemplates
+          path: deploymenttemplates
+
+  Deploy:
+    name: Deploy ARM resource and web app
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifact
+        uses: action/download-artifact@v2
+        continue-on-error: false
+        with:
+          name: buildartifacts
+          path: buildartifacts
+
+      - name: Download the ARM artifact
+        uses: actions/download-artifact@v2
+        continue-on-error: false
+        with:
+          name: deploymenttemplates
+          path: deploymenttemplates
+
+      - name: Unzip build
+        run: |
+          unzip -qq ./buildartifacts/Application.zip -d .
+
+      - name: Unzip ARM template
+        run: |
+          unzip -qq ./deploymenttemplates/armtemplates.zip -d .
+
+      - name: Login to Azure
+        uses: azure/login@v1
+        continue-on-error: false
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy ARM Template
+        uses: azure/CLI@v1
+        continue-on-error: false
         with:
           inlineScript: |
-            Get-AzResourceGroup
-          azPSVersion: "latest"
+            az group create --name "${{ env.RESOURCEGROUPNAME }}" --location "${{ env.LOCATION }}"
+            az deployment group create --resource-group "${{ env.RESOURCEGROUPNAME }}" --template-file ./armTemplate/appsvc.json --parameters webAppName="${{ env.AZURE_WEBAPP_NAME }}" hostingPlanName="${{ env.HOSTINGPLANNAME }}" appInsightsLocation="${{ env.APPINSIGHTLOCATION }}" sku="${{ env.SKU }}"
+
+      - name: Deploy the Web App
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          package: ${{ env.AZURE_WEBAPP_PACKAGE_PATH }}
+
+
+
+
+
+
